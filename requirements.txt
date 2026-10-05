@@ -1,0 +1,6 @@
+streamlit
+google-genai
+scikit-learn>=1.4
+pandas
+numpy
+joblib
