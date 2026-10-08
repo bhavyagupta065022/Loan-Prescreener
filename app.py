@@ -2,7 +2,12 @@ import time, joblib, numpy as np, pandas as pd, streamlit as st
 from google import genai
 
 MODEL_NAME = "gemini-3.8-flash"   # change here if Google renames the model
+MODELS = [MODEL_NAME, "gemini-flash-latest", "gemini-flash-lite-latest"]   # backups if the first is overloaded
 st.set_page_config(page_title="Loan Pre-Screener", page_icon="🏦", layout="wide")
+
+@st.cache_resource
+def gem_cache():
+    return {}
 
 @st.cache_resource
 def load():
@@ -52,14 +57,20 @@ def explain(decision, p, top):
               "plain language, for the applicant. Use ONLY the facts given, do not invent numbers or advice, "
               "and say it is an automated estimate, not a final lending decision.\n"
               f"Suggestion: {decision}. Estimated default probability: {p*100:.0f}%. Factors: {facts}.")
+    cache = gem_cache()
+    if prompt in cache:                      # same case asked before: reuse the earlier Gemini answer
+        return cache[prompt], "Gemini"
     last = None
-    for _ in range(3):   # Gemini sometimes returns 503 "high demand": retry before falling back
-        try:
-            client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-            return client.models.generate_content(model=MODEL_NAME, contents=prompt).text, "Gemini"
-        except Exception as e:
-            last = e
-            time.sleep(1.5)
+    for attempt in range(2):                 # Gemini sometimes returns 503 "high demand": try other models, then retry
+        for m in MODELS:
+            try:
+                client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                text = client.models.generate_content(model=m, contents=prompt).text
+                cache[prompt] = text
+                return text, "Gemini"
+            except Exception as e:
+                last = e
+        time.sleep(2)
     return template, f"built-in template (AI unavailable: {str(last)[:100]})"
 
 st.title("🏦 Loan Pre-Screener")
@@ -68,7 +79,7 @@ st.caption("Educational prototype trained on real LendingClub loans (US dollars)
 
 with st.sidebar:
     st.subheader("Decision thresholds")
-    lo = st.slider("Approve if default risk below", 0.05, 0.40, 0.18, 0.01)
+    lo = st.slider("Approve if default risk below", 0.05, 0.40, 0.15, 0.01)
     hi = st.slider("Reject if default risk above", 0.10, 0.60, 0.30, 0.01)
     st.caption("Between the two = refer to a human underwriter. (In a real product only underwriters could change these.)")
     if hi <= lo + 0.01:
